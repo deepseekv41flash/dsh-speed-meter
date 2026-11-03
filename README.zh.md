@@ -51,13 +51,16 @@ dsh plugin --profile <profile> add dsh-speed-meter
 
 - `GET /speed-meter/api/stream` → SSE，每次变化推送 `data: <同一份 JSON>`；空闲时发注释行保活。
 - 宿主内调试：`ctx.emit('speed-meter/snapshot', reply => ...)` 可同步取快照（桌面宿主对普通浏览器关闭了 HTTP 访问时用这条）。
+- 快照里的 `debug` 字段给出传输现场：`{ apiHits, sseHits, sseActive, lastHitAt, lastPushAt, generation, taps }`。判断"客户端到底有没有打进来"看 `apiHits/sseHits`；判断"上一代是否还占着路由"看 `generation`。
 
 ## 边界与已知限制
 
+- **状态是进程级全局单例**（`globalThis[Symbol.for('dsh-speed-meter/state-v1')]`）。原因：Cordis 热重载会清 ESM 缓存并把新 fiber 挂到旧 fiber 之前，路由表可能仍由上一代 handler 持有；若状态放在模块/fiber 闭包里，表盘会冻结在重载那一刻（这正是 0.1.1 修的 bug）。放进进程级单例后，任何一代 handler 读写的都是同一份实时数据。
+- 重复路由的处理：先尝试常规注册；若命中 `duplicate exact route`，就把该路径从 `webServer.exact` 摘掉再重新注册，保证**最新一代 fiber 拥有路由**。
+- 页面连接：DSH NEXT 的页面跑在 `dsh-app://app`，页面请求经主进程 `forwardWebRequest` 带 cookie + renderer token 转发到宿主 HTTP，所以插件路由从页面可达；但 SDK 里的 EventSource 连接不会跨 fiber 迁移——已建立的连接仍绑在注册它那一代的 response 对象上，最干净的一次生效需要刷新页面（Ctrl+R）。
 - 全部状态在内存里，DSH 重启归零（实时表盘不需要持久化；要台账请用 dsh-usage-plugin）。
 - `usage` 只在流正常收尾时上报；被中断/超时的调用拿不到精确 token，只能按校准系数估算并标 `exact=false`。
 - 多会话并行时表盘显示"最近活跃的那一次调用"（快照里带 `sessionId` 可区分）。
-- 宿主半热重载时若上一个 fiber 的路由没释放，注册会命中 `duplicate exact route`；插件对此容错（保留旧路由），完整清理需要重启应用。
 
 ## 开发
 

@@ -40,9 +40,13 @@ For local development, link it into the profile and restart DSH NEXT; client-hal
 - `GET /speed-meter/api` — current snapshot JSON (running / last / recent / calibrated).
 - `GET /speed-meter/api/stream` — SSE, one `data: <snapshot JSON>` per change, comment keepalive when idle.
 - In-host debugging: `ctx.emit('speed-meter/snapshot', reply => ...)` returns the snapshot synchronously — useful when the desktop host blocks ordinary browser HTTP access.
+- The snapshot's `debug` field shows the transport现场: `{ apiHits, sseHits, sseActive, lastHitAt, lastPushAt, generation, taps }` — `apiHits/sseHits` tell whether the client reached the host at all; `generation` tells whether a previous fiber still owns a route.
 
 ## Limits
 
+- **State is a process-global singleton** (`globalThis[Symbol.for('dsh-speed-meter/state-v1')]`). A Cordis hot reload clears the ESM cache and mounts the replacement fiber before retiring the old one, so the route table can still hold the previous generation's handler; state kept in a module/fiber closure would then be frozen at the reload instant (the 0.1.1 bug). With one process-global state every generation serves the same live data.
+- Duplicate routes: register normally; on `duplicate exact route`, drop the path from `webServer.exact` and register again so the newest fiber owns the route.
+- Page transport: the DSH NEXT page runs on `dsh-app://app`; its requests are forwarded by the main process (`forwardWebRequest`) with the cookie and renderer token, so plugin routes are reachable from the page. An already-open EventSource stays bound to the response of the generation that created it, so the cleanest activation is one page reload (Ctrl+R).
 - Everything is in memory; a DSH restart resets it (a live gauge needs no persistence — for ledgers use dsh-usage-plugin).
 - `usage` only arrives when a stream finishes normally; interrupted calls fall back to the calibrated estimate and are marked `exact=false`.
 - With several sessions streaming, the gauge shows the most recent call (snapshots carry `sessionId`).

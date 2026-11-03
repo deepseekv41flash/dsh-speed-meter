@@ -2,14 +2,32 @@
 // with no DSH runtime present.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import plugin from '../lib/index.js'
+import plugin, { __reset, state } from '../lib/index.js'
 
-function makeCtx() {
+// State lives at module scope (shared across fiber generations on purpose), so
+// every test starts from a clean slate.
+test.beforeEach(() => { __reset() })
+
+function makeWebServer() {
+  // Mirrors @deepseek-ai/dsh-host-webserver: a public exact Map, duplicate
+  // registration throws, register() returns the removing disposer.
+  const ws = {
+    exact: new Map(),
+    register(route) {
+      if (ws.exact.has(route.path)) throw new Error(`webserver: duplicate exact route "${route.path}"`)
+      ws.exact.set(route.path, route)
+      return () => ws.exact.delete(route.path)
+    },
+  }
+  return ws
+}
+
+function makeCtx(sharedWs) {
   const handlers = new Map()
-  const routes = []
+  const ws = sharedWs || makeWebServer()
   const ctx = {
     on(name, fn) { handlers.set(name, fn) },
-    get(name) { return name === 'webServer' ? { register(r) { routes.push(r); return () => {} } } : undefined },
+    get(name) { return name === 'webServer' ? ws : undefined },
     // cordis effect: run the factory and keep its disposer
     effect(fn) { return fn() },
     emit(name, ...args) {
@@ -17,7 +35,7 @@ function makeCtx() {
       if (fn) fn(...args)
     },
   }
-  return { ctx, handlers, routes }
+  return { ctx, handlers, routes: ws.exact }
 }
 
 function chunkStream(chunks, gapMs = 6) {
@@ -40,7 +58,7 @@ function snapshotOf(handlers) {
 test('registers the JSON and SSE routes', () => {
   const { ctx, routes } = makeCtx()
   plugin.apply(ctx)
-  const paths = routes.map(r => r.path).sort()
+  const paths = [...routes.keys()].sort()
   assert.deepEqual(paths, ['/speed-meter/api', '/speed-meter/api/stream'])
 })
 
@@ -126,4 +144,63 @@ test('exposes the running snapshot while the stream is open', async () => {
   snap = snapshotOf(handlers)
   assert.equal(snap.running, null)
   assert.equal(snap.last.tokens, Math.round(200 * 3.6)) // no usage => estimate
+})
+
+test('survives a fiber generation swap: state is module scope, not closure scope', async () => {
+  // generation 1: a call completes and leaves state behind
+  const g1 = makeCtx()
+  plugin.apply(g1.ctx)
+  const tap1 = g1.handlers.get('llm/stream')
+  const s1 = tap1(
+    { model: 'gen-model', sessionId: 'sg' },
+    () => chunkStream([
+      { type: 'text-delta', index: 0, text: 'q'.repeat(200) },
+      { type: 'text-delta', index: 0, text: 'q'.repeat(200) },
+      { type: 'usage', usage: { outputTokens: 120 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ], 60)
+  )
+  for await (const _ of s1) { /* drain */ }
+  const before = snapshotOf(g1.handlers)
+  assert.equal(before.last.tokens, 120)
+
+  // generation 2 mounts against the SAME webserver instance: the old generation
+  // still holds both paths, which must not throw and must end up owned by the
+  // newest generation.
+  const ws = g1.routes
+  const g2ctx = {
+    handlers: new Map(),
+    on(name, fn) { this.handlers.set(name, fn) },
+    get(name) { return name === 'webServer' ? ws : undefined },
+    effect(fn) { return fn() },
+  }
+  plugin.apply(g2ctx)
+  assert.deepEqual([...ws.keys()].sort(), ['/speed-meter/api', '/speed-meter/api/stream'], 'newest generation owns the routes')
+  const after = snapshotOf(g2ctx.handlers)
+  assert.equal(after.last.tokens, 120, 'state survived the generation swap')
+  assert.equal(state().debug.generation, 2)
+})
+
+test('a fresh module instance (ESM cache cleared on reload) reads the same global state', async () => {
+  const g1 = makeCtx()
+  plugin.apply(g1.ctx)
+  const tap = g1.handlers.get('llm/stream')
+  const s1 = tap(
+    { model: 'global-model', sessionId: 'sx' },
+    () => chunkStream([
+      { type: 'text-delta', index: 0, text: 'g'.repeat(300) },
+      { type: 'text-delta', index: 0, text: 'g'.repeat(300) },
+      { type: 'usage', usage: { outputTokens: 90 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ], 60)
+  )
+  for await (const _ of s1) { /* drain */ }
+  assert.equal(snapshotOf(g1.handlers).last.tokens, 90)
+
+  // second, independent module instance — what a reload produces after the ESM
+  // cache is cleared. This is the case that used to serve a frozen copy.
+  const fresh = await import('../lib/index.js?reload-probe=1')
+  const snap = fresh.snapshot()
+  assert.equal(snap.last.tokens, 90, 'new module instance sees the shared state')
+  assert.equal(fresh.state().debug.generation, 1, 'generation counter carried in the global state')
 })

@@ -17,6 +17,8 @@ const plain = () => ({ createElement(type, props, ...children) { return { type, 
 function load() {
   let def = null
   const rendered = []
+  const timers = new Map()
+  let timerId = 0
   const slots = {
     inject(key, effect) { effect() },
     register(reg, render) { rendered.push({ reg, render }); return () => {} },
@@ -25,9 +27,14 @@ function load() {
     window: { __ModuleLoader__: { load: (d) => { def = d } } },
     navigator: { language: 'zh-CN' },
     console,
-    setTimeout, clearTimeout, setInterval, clearInterval,
+    // fake timers: the module starts a poller at load time, which must not keep
+    // the test process (or the next test) alive
+    setTimeout: (fn) => { const id = ++timerId; timers.set(id, fn); return id },
+    clearTimeout: (id) => timers.delete(id),
+    setInterval: (fn) => { const id = ++timerId; timers.set(id, fn); return id },
+    clearInterval: (id) => timers.delete(id),
     EventSource: class { constructor() {} close() {} },
-    fetch: async () => ({ json: async () => ({}) }),
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ running: null, last: null, recent: [], calibrated: [] }) }),
     JSON, Date, Math, isFinite, String, Number, Object, Array,
   }
   vm.createContext(sandbox)
@@ -100,4 +107,32 @@ test('suppresses the rate for a short burst but keeps the token count', () => {
   const line = textOf(render()).join(' ')
   assert.match(line, /43 tok/)
   assert.doesNotMatch(line, /tok\/s/)
+})
+
+test('surfaces a transport failure instead of rendering nothing', () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+
+  mod.__link.attempts = 3
+  mod.__link.ok = false
+  mod.__link.httpStatus = 403
+  const line = textOf(render()).join(' ')
+  assert.match(line, /未连上宿主/)
+  assert.match(line, /HTTP 403/)
+})
+
+test('marks a stale reading so a frozen gauge never looks live', () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+
+  mod.__store.set({
+    running: null,
+    last: { sessionId: 's3', model: 'm', tokens: 1661, chars: 5000, exact: true, reliable: true, genMs: 9000, tokSec: 184.5 },
+    recent: [], calibrated: [],
+  })
+  mod.__link.lastPayloadAt = Date.now() - 12000
+  const line = textOf(render()).join(' ')
+  assert.match(line, /已停/)
 })
