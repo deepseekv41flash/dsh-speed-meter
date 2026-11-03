@@ -365,3 +365,65 @@ test('collapses the duplicate row produced when two taps observe one call', asyn
   const view = snapshotOfSid(handlers, 'DD')
   assert.equal(view.recent.length, 1, 'identical totals collapse into one row')
 })
+
+test('a finished turn reports its average speed and cumulative usage', async () => {
+  const { ctx, handlers } = makeCtx()
+  plugin.apply(ctx)
+  const tap = handlers.get('llm/stream')
+
+  async function call(tokens, chars, gapMs) {
+    const stream = tap(
+      { model: 'm', sessionId: 'TURN' },
+      () => chunkStream([
+        { type: 'text-delta', index: 0, text: 'a'.repeat(chars) },
+        { type: 'usage', usage: { outputTokens: tokens } },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ], gapMs)
+    )
+    for await (const _ of stream) { /* drain */ }
+  }
+
+  // turn starts (the dock must keep quiet until the turn ends)
+  ctx.emit('agent/status', { agent: { session: { id: 'session-TURN' } }, status: 'running' })
+  await call(120, 400, 60)
+  await call(80, 300, 60)
+  const during = snapshotOfSid(handlers, 'TURN').turn
+  assert.equal(during.active, true)
+  assert.equal(during.calls, 2)
+  assert.equal(during.tokens, 200)
+
+  // turn ends -> the pill switches to this turn's aggregate
+  ctx.emit('agent/status', { agent: { session: { id: 'session-TURN' } }, status: 'idle' })
+  const view = snapshotOfSid(handlers, 'TURN')
+  const t = view.turn
+  assert.equal(t.active, false)
+  assert.equal(t.calls, 2)
+  assert.equal(t.tokens, 200)
+  assert.equal(t.chars, 700)
+  assert.ok(t.genMs > 0)
+  assert.equal(t.tokSec, Math.round((200 * 1000 / t.genMs) * 10) / 10)
+  assert.equal(t.exact, true)
+  assert.deepEqual(t.models, ['m'])
+  // the last single call is still available for the tooltip
+  assert.equal(view.last.tokens, 80)
+})
+
+test('a call with no running transition still opens an implicit turn', async () => {
+  const { ctx, handlers } = makeCtx()
+  plugin.apply(ctx)
+  const tap = handlers.get('llm/stream')
+  const stream = tap(
+    { model: 'm', sessionId: 'IMP' },
+    () => chunkStream([
+      { type: 'text-delta', index: 0, text: 'b'.repeat(200) },
+      { type: 'usage', usage: { outputTokens: 50 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ], 60)
+  )
+  for await (const _ of stream) { /* drain */ }
+  const t = snapshotOfSid(handlers, 'IMP').turn
+  assert.ok(t, 'turn exists even without a status event')
+  assert.equal(t.calls, 1)
+  assert.equal(t.tokens, 50)
+  assert.equal(t.active, true)
+})

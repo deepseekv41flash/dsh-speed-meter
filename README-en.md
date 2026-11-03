@@ -15,8 +15,11 @@ A real-time output-speed meter for DSH (DeepSeek Harness): a pill sits in the co
 | --- | --- | --- |
 | Streaming | `⚡ 339.5 tok/s` | Instant rate over a 1.2 s sliding window, scaled by the learned ratio |
 | Waiting | `⚡ waiting for first token` | Request sent, no delta yet |
-| Settled | `⚡ 156.9 tok/s · 812 tok` | **Exact** rate for that call: `outputTokens / generation time` |
+| **Turn finished** | `⚡ turn 175.0 tok/s · 420 tok · 3 calls` | **This turn's** average rate and cumulative usage: total `outputTokens ÷ net generation time`, summing every step and tool round |
+| No turn data yet | `⚡ 156.9 tok/s · 812 tok` | Falls back to the last single call |
 | Short burst | `⚡ 54 tok · 0.6s` | No rate reported (see reliability rule) |
+
+A turn runs from the agent going `running` to `idle`; while it streams the pill keeps the instant rate and the tooltip shows the running turn totals.
 
 Hovering shows the full readout (sessionId / model / purpose / chars / ratio / elapsed); clicking expands the last 12 calls and the calibration state.
 
@@ -24,7 +27,8 @@ Hovering shows the full readout (sessionId / model / purpose / chars / ratio / e
 
 1. **Host half** taps the `llm/stream` waterfall, wrapping every streaming model call, counting `text-delta` / `reasoning-delta` / `tool-call-delta` characters and timing the first/last delta.
 2. When the stream ends the API reports a `usage` block (`outputTokens`). The host divides it by the counted characters to obtain that model's **exact chars→tokens ratio** and keeps it as an EMA (α=0.2). Live estimates multiply by that calibration, so they converge on real tokens.
-3. **Web client half** consumes an SSE stream (`/speed-meter/api/stream`, a full snapshot pushed every 400 ms when it changes), falling back to 900 ms polling.
+3. **Turn aggregation**: the host watches `agent/status`; every finished model call in the turn adds tokens, characters, net generation time, call count and models to that session's `turn`, which the snapshot ships once the turn ends.
+4. **Web client half** consumes an SSE stream (`/speed-meter/api/stream`, a full snapshot pushed every 400 ms when it changes), falling back to 900 ms polling.
 
 ### Reliability rule
 
@@ -42,7 +46,7 @@ For local development, link it into the profile and restart DSH NEXT; client-hal
 
 ## API
 
-- `GET /speed-meter/api` — current snapshot JSON (running / last / recent / calibrated).
+- `GET /speed-meter/api?session=<id>` — the session snapshot JSON (running / last / recent / turn / calibrated); omitted → process-wide latest.
 - `GET /speed-meter/api/stream` — SSE, one `data: <snapshot JSON>` per change, comment keepalive when idle.
 - In-host debugging: `ctx.emit('speed-meter/snapshot', reply => ...)` returns the snapshot synchronously — useful when the desktop host blocks ordinary browser HTTP access.
 - The snapshot's `debug` field shows the transport现场: `{ apiHits, sseHits, sseActive, lastHitAt, lastPushAt, generation, taps }` — `apiHits/sseHits` tell whether the client reached the host at all; `generation` tells whether a previous fiber still owns a route.

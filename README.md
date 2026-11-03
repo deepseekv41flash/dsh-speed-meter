@@ -18,8 +18,11 @@ DSH（DeepSeek Harness）实时输出速度计：在输入框下方的 composer 
 | --- | --- | --- |
 | 流式生成中 | `⚡ 339.5 tok/s` | 最近 1.2 秒滑动窗口的瞬时速率（带自校准系数换算） |
 | 等待首字 | `⚡ 等待首字` | 请求已发出、还没收到第一个增量 |
-| 调用结束 | `⚡ 156.9 tok/s · 812 tok` | 该次调用的**精确**速率：`outputTokens / 生成耗时` |
+| **一轮结束** | `⚡ 本轮 175.0 tok/s · 420 tok · 3次` | **该轮会话**的平均速率与累计用量：总 `outputTokens ÷ 本轮净生成耗时`，一轮内多步/工具回合全部累加 |
+| 无本轮数据时 | `⚡ 156.9 tok/s · 812 tok` | 退回显示上一次调用的精确速率 |
 | 短突发调用 | `⚡ 54 tok · 0.6s` | 不输出速率（见下"可靠性判据"） |
+
+轮的边界 = 智能体 `running → idle`；流式过程中胶囊仍显示瞬时速率，tooltip 里另有"本轮累计"。
 
 悬停有完整读数（sessionId / model / purpose / 累计字符数 / ratio / 耗时）；点击展开最近 12 次调用与每模型校准状态。
 
@@ -45,7 +48,7 @@ dsh plugin --profile <profile> add dsh-speed-meter
 
 ## 数据接口
 
-- `GET /speed-meter/api?session=<id>` → 该会话的快照 JSON（不带参数则是进程级最新一次调用）：
+- `GET /speed-meter/api?session=<id>` → 该会话的快照 JSON（不带参数则是进程级最新一次调用），含 `turn`（本轮汇总）：
 
 ```json
 {

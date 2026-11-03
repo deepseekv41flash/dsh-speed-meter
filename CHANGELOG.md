@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — 2026-11-04
+
+- **新增：每轮会话结束后显示"本轮"的平均输出速度与累计用量**（此前只显示上一次调用的数字）。
+  - 宿主监听 `agent/status` 的 `running ⇄ idle` 作为轮边界；一轮内所有模型调用（多步、工具回合、重试）都累加进该轮。
+  - 快照新增 `turn` 字段：`{ active, calls, tokens, chars, genMs, wallMs, exact, models, tokSec, wallTokSec }`。`tokSec = 总 tokens ÷ 本轮净生成耗时`（不含工具执行等待），`wallTokSec` 用墙钟时间另给一份。
+  - 客户端空闲时优先显示本轮汇总：`⚡ 本轮 175.0 tok/s · 420 tok · 3次`；tooltip 给出本轮 token/调用次数/净生成耗时/墙钟/模型/精确或估算，并保留"上次调用"作为对照。
+  - 生成过程中仍显示实时瞬时速率，tooltip 追加"本轮累计"。
+  - 没有收到 `running` 状态的调用（插件中途加载、标题/摘要调用）会开一个隐式轮，不会丢数据。
+- 会话 id 两种写法（裸 uuid / `session-` 前缀）统一归一化后再归档。
+- 单测增至 22 个（本轮聚合、隐式轮、本轮胶囊渲染、轮内实时速率不被覆盖）。
+
 ## 0.1.5 — 2026-11-03
 
 - 仓库文档格式对齐其他 DSH 插件：`README.md` 改为**中文为主**，新增 `README-en.md` 英文版，两份第 6 行都带语言切换链接 `[English](README-en.md) · [简体中文](README.md)`；同时补 npm/license badge。

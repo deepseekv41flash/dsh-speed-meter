@@ -151,3 +151,38 @@ test('marks a stale reading so a frozen gauge never looks live', () => {
   const line = textOf(render()).join(' ')
   assert.match(line, /已停/)
 })
+
+test('after a turn ends the pill reports the turn average and usage, not the last call', () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+
+  mod.__store.set({
+    running: null,
+    last: { sessionId: 's', model: 'm', tokens: 80, chars: 300, exact: true, reliable: true, genMs: 400, tokSec: 200 },
+    turn: { active: false, startedAt: Date.now() - 9000, endedAt: Date.now(), calls: 3, tokens: 420, chars: 1500, genMs: 2400, wallMs: 9000, exact: true, models: ['m'], tokSec: 175, wallTokSec: 46.7 },
+    recent: [], calibrated: [],
+  })
+  const line = textOf(render()).join(' ')
+  assert.match(line, /本轮/)
+  assert.match(line, /175\.0 tok\/s/)
+  assert.match(line, /420 tok/)
+  assert.match(line, /3次/, 'call count shown (' + line + ')')
+  assert.doesNotMatch(line, /200\.0 tok\/s/, 'the last single call rate is not the headline')
+})
+
+test('while the turn is still running the pill keeps the live instant rate', () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+
+  mod.__store.set({
+    running: { sessionId: 's', model: 'm', tokSec: 100, windowTokSec: 123.4, chars: 500, ratio: 3, estTokens: 1500, genMs: 2000 },
+    last: null,
+    turn: { active: true, startedAt: Date.now(), endedAt: null, calls: 1, tokens: 1500, chars: 500, genMs: 2000, wallMs: 2000, exact: false, models: ['m'], tokSec: 750, wallTokSec: 750 },
+    recent: [], calibrated: [],
+  })
+  const line = textOf(render()).join(' ')
+  assert.match(line, /123\.4 tok\/s/)
+  assert.doesNotMatch(line, /本轮/)
+})
