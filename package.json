@@ -1,6 +1,6 @@
 {
   "name": "dsh-speed-meter",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "DeepSeek Harness real-time output speed meter: host half taps every streaming model call via llm/stream, counts text/reasoning/tool-call deltas live, self-calibrates chars→tokens per model from the final usage chunk, and exposes an SSE endpoint; the web client half renders a live tok/s pill under the composer and a per-call exact rate after finish.",
   "keywords": [
     "deepseek",

@@ -26,7 +26,10 @@ function makeCtx(sharedWs) {
   const handlers = new Map()
   const ws = sharedWs || makeWebServer()
   const ctx = {
-    on(name, fn) { handlers.set(name, fn) },
+    on(name, fn) {
+      handlers.set(name, fn)
+      return () => { if (handlers.get(name) === fn) handlers.delete(name) }
+    },
     get(name) { return name === 'webServer' ? ws : undefined },
     // cordis effect: run the factory and keep its disposer
     effect(fn) { return fn() },
@@ -316,4 +319,49 @@ test('a throwing per-session store can never fail the model turn', async () => {
   for await (const c of stream) seen.push(c.type) // must complete without throwing
   assert.deepEqual(seen, ['text-delta', 'usage', 'finish'])
   assert.match(state().debug.lastError || '', /boom/)
+})
+
+test('a new generation retires the previous llm/stream tap (no double counting)', async () => {
+  const ws = makeWebServer()
+  const g1 = makeCtx(ws)
+  plugin.apply(g1.ctx)
+  const tap1 = g1.handlers.get('llm/stream')
+  assert.ok(tap1)
+
+  const g2 = makeCtx(ws)
+  plugin.apply(g2.ctx) // same process, same webserver
+  const tap2 = g2.handlers.get('llm/stream')
+  assert.ok(tap2)
+  assert.notEqual(tap1, tap2, 'new generation installed its own tap')
+  assert.equal(g1.handlers.has('llm/stream'), false, 'previous tap was disposed')
+
+  // one call observed only by the surviving tap => exactly one record
+  const stream = tap2(
+    { model: 'm', sessionId: 'D1' },
+    () => chunkStream([
+      { type: 'text-delta', index: 0, text: 'x'.repeat(400) },
+      { type: 'usage', usage: { outputTokens: 88 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ], 60)
+  )
+  for await (const _ of stream) { /* drain */ }
+  const view = snapshotOfSid(g2.handlers, 'D1')
+  assert.equal(view.recent.length, 1)
+  assert.equal(view.last.tokens, 88)
+})
+
+test('collapses the duplicate row produced when two taps observe one call', async () => {
+  const { ctx, handlers } = makeCtx()
+  plugin.apply(ctx)
+  const tap = handlers.get('llm/stream')
+  // a run whose finalize is executed twice (what a stale second tap used to do)
+  const mk = () => tap({ model: 'm', sessionId: 'DD' }, () => chunkStream([
+    { type: 'text-delta', index: 0, text: 'y'.repeat(500) },
+    { type: 'usage', usage: { outputTokens: 66 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ], 60))
+  for await (const _ of mk()) { /* drain */ }
+  for await (const _ of mk()) { /* drain */ }
+  const view = snapshotOfSid(handlers, 'DD')
+  assert.equal(view.recent.length, 1, 'identical totals collapse into one row')
 })

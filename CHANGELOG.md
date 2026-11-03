@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 — 2026-11-03
+
+- 新 tap 上岗即退掉旧 tap：HMR 瞬间新旧两代 `llm/stream` 监听器可能同时存活，同一次调用会被 finalize 两次（`recent` 里出现完全相同的两行）。现在 `apply()` 会先 dispose 上一代表针再装新的。
+- `recent` 写入去重：同一会话/模型/`tokens`/`chars`/`genMs` 完全一致的相邻记录合并为一行（防御多 tap 并存的残余场景）。
+- 单测增至 18 个（tap 交接只留一个、重复行折叠）。
+
 ## 0.1.3 — 2026-11-03
 
 - **修复：插件会让本轮运行失败**（`TypeError: Cannot read properties of undefined (reading 'get')`，出现在 `sessionState` → `finalize`）。根因是 0.1.2 给进程级全局状态单例**新增了 `sessions` 字段**，而热重载前留下的旧形状对象没有该字段，`st.sessions.get(...)` 直接抛错；异常发生在 `llm/stream` 包装流的 `finally` 里，于是把整轮模型调用判失败。修法两层：
