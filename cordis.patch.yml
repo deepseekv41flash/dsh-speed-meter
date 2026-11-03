@@ -1,0 +1,11 @@
+# dsh-speed-meter — bundle patch layer.
+#
+# The `inject` list tells the Cordis loader which services this plugin needs
+# before `apply` runs. The webServer route registration is the only service the
+# plugin itself requires at apply time; LLm events (llm/stream) ride the
+# context event bus directly, so no llm service dependency is declared.
+- insert:
+    - id: speed-meter
+      name: dsh-speed-meter
+      inject:
+        - webServer

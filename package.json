@@ -1,0 +1,57 @@
+{
+  "name": "dsh-speed-meter",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness real-time output speed meter: host half taps every streaming model call via llm/stream, counts text/reasoning/tool-call deltas live, self-calibrates chars→tokens per model from the final usage chunk, and exposes an SSE endpoint; the web client half renders a live tok/s pill under the composer and a per-call exact rate after finish.",
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "plugin",
+    "tokens",
+    "speed",
+    "tok-per-sec"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseekv41flash/dsh-speed-meter.git"
+  },
+  "homepage": "https://github.com/deepseekv41flash/dsh-speed-meter#readme",
+  "bugs": {
+    "url": "https://github.com/deepseekv41flash/dsh-speed-meter/issues"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.spec.mjs\""
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  }
+}
