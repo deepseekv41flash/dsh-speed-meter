@@ -19,6 +19,7 @@ function load() {
   const rendered = []
   const timers = new Map()
   let timerId = 0
+  const fetches = []
   const slots = {
     inject(key, effect) { effect() },
     register(reg, render) { rendered.push({ reg, render }); return () => {} },
@@ -34,7 +35,7 @@ function load() {
     setInterval: (fn) => { const id = ++timerId; timers.set(id, fn); return id },
     clearInterval: (id) => timers.delete(id),
     EventSource: class { constructor() {} close() {} },
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({ running: null, last: null, recent: [], calibrated: [] }) }),
+    fetch: async (url) => { fetches.push(String(url)); return { ok: true, status: 200, json: async () => ({ running: null, last: null, recent: [], calibrated: [] }) } },
     JSON, Date, Math, isFinite, String, Number, Object, Array,
   }
   vm.createContext(sandbox)
@@ -45,7 +46,7 @@ function load() {
     if (name === 'react') return plain()
     throw new Error('unexpected require: ' + name)
   })
-  return { mod, slots, rendered }
+  return { mod, slots, rendered, fetches }
 }
 
 function textOf(node, acc = []) {
@@ -67,6 +68,20 @@ test('exports inject/apply and registers the composer dock entry', () => {
   assert.equal(rendered[0].reg.name, 'conversation.composer.dock')
   assert.equal(rendered[0].reg.id, 'speed-meter')
   assert.equal(rendered[0].reg.order, 10)
+})
+
+test('scopes requests to the current session id', async () => {
+  const { mod, slots, fetches } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  mod.__session.set('sess-A')
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.ok(fetches.some(u => u.indexOf('/speed-meter/api?session=sess-A') >= 0), 'poll carries the session id: ' + fetches.join(','))
+  mod.__session.set('sess-B')
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.ok(fetches.some(u => u.indexOf('/speed-meter/api?session=sess-B') >= 0), 'switch re-binds the poll')
+  assert.equal(mod.__session.get(), 'sess-B')
 })
 
 test('renders nothing on a cold snapshot, a live rate while running, and the exact rate after', () => {

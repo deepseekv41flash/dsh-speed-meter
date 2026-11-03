@@ -55,6 +55,13 @@ function snapshotOf(handlers) {
   return snap
 }
 
+function snapshotOfSid(handlers, sessionId) {
+  let snap = null
+  handlers.get('speed-meter/snapshot')(sessionId, (s) => { snap = s })
+  assert.ok(snap, 'session snapshot handler answered')
+  return snap
+}
+
 test('registers the JSON and SSE routes', () => {
   const { ctx, routes } = makeCtx()
   plugin.apply(ctx)
@@ -203,4 +210,110 @@ test('a fresh module instance (ESM cache cleared on reload) reads the same globa
   const snap = fresh.snapshot()
   assert.equal(snap.last.tokens, 90, 'new module instance sees the shared state')
   assert.equal(fresh.state().debug.generation, 1, 'generation counter carried in the global state')
+})
+
+test('scopes the snapshot to one session so the dock never shows another window', async () => {
+  const { ctx, handlers } = makeCtx()
+  plugin.apply(ctx)
+  const tap = handlers.get('llm/stream')
+
+  async function call(sessionId, tokens, chars) {
+    const stream = tap(
+      { model: 'm', sessionId },
+      () => chunkStream([
+        { type: 'text-delta', index: 0, text: 'a'.repeat(chars) },
+        { type: 'usage', usage: { outputTokens: tokens } },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ], 60)
+    )
+    for await (const _ of stream) { /* drain */ }
+  }
+
+  await call('A', 111, 400)
+  await call('B', 222, 800)
+
+  const viewA = snapshotOfSid(handlers, 'A')
+  const viewB = snapshotOfSid(handlers, 'B')
+  assert.equal(viewA.last.sessionId, 'A')
+  assert.equal(viewA.last.tokens, 111)
+  assert.deepEqual(viewA.recent.map(r => r.tokens), [111])
+  assert.equal(viewB.last.sessionId, 'B')
+  assert.equal(viewB.last.tokens, 222)
+  assert.deepEqual(viewB.recent.map(r => r.tokens), [222])
+
+  // no session => process-wide latest (operator view)
+  const globalSnap = snapshotOf(handlers)
+  assert.equal(globalSnap.last.sessionId, 'B')
+  assert.deepEqual(globalSnap.recent.map(r => r.tokens).sort((x, y) => y - x), [222, 111])
+})
+
+test('a running call in another session is reported as elsewhere, not as this session\'s rate', async () => {
+  const { ctx, handlers } = makeCtx()
+  plugin.apply(ctx)
+  const tap = handlers.get('llm/stream')
+
+  const stream = tap(
+    { model: 'm', sessionId: 'OTHER' },
+    () => chunkStream([{ type: 'text-delta', index: 0, text: 'x'.repeat(300) }], 40)
+  )
+  const it = stream[Symbol.asyncIterator]()
+  await it.next() // stream is live in OTHER
+
+  const view = snapshotOfSid(handlers, 'MINE')
+  assert.equal(view.running, null, 'no foreign rate leaks into this session')
+  assert.equal(view.runningElsewhere.sessionId, 'OTHER')
+
+  for await (const _ of { [Symbol.asyncIterator]: () => it }) { /* drain */ }
+})
+
+test('normalizes a legacy global state left by an older build (no sessions field)', async () => {
+  // Simulate the 0.1.1 singleton surviving a hot reload into 0.1.2+ code.
+  const legacyKey = Symbol.for('dsh-speed-meter/state-v1')
+  globalThis[legacyKey] = {
+    running: null, last: null, recent: [], ratioByModel: new Map(),
+    debug: { apiHits: 1, sseHits: 0, sseActive: 0, lastHitAt: 0, lastPushAt: 0, generation: 3, taps: 9 },
+  } // note: no `sessions`
+
+  const { ctx, handlers } = makeCtx()
+  plugin.apply(ctx)
+  const tap = handlers.get('llm/stream')
+  const stream = tap(
+    { model: 'legacy-model', sessionId: 'L1' },
+    () => chunkStream([
+      { type: 'text-delta', index: 0, text: 'l'.repeat(300) },
+      { type: 'usage', usage: { outputTokens: 77 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ], 60)
+  )
+  // must not throw out of the stream unwind path
+  for await (const _ of stream) { /* drain */ }
+
+  const view = snapshotOfSid(handlers, 'L1')
+  assert.equal(view.last.tokens, 77)
+  assert.equal(view.last.sessionId, 'L1')
+})
+
+test('a throwing per-session store can never fail the model turn', async () => {
+  const legacyKey = Symbol.for('dsh-speed-meter/state-v1')
+  class ThrowingMap extends Map { get() { throw new Error('boom') } }
+  globalThis[legacyKey] = {
+    running: null, last: null, recent: [], sessions: new ThrowingMap(), ratioByModel: new Map(),
+    debug: { apiHits: 0, sseHits: 0, sseActive: 0, lastHitAt: 0, lastPushAt: 0, generation: 0, taps: 0 },
+  }
+
+  const { ctx, handlers } = makeCtx()
+  plugin.apply(ctx)
+  const tap = handlers.get('llm/stream')
+  const stream = tap(
+    { model: 'm', sessionId: 'S' },
+    () => chunkStream([
+      { type: 'text-delta', index: 0, text: 'z'.repeat(100) },
+      { type: 'usage', usage: { outputTokens: 10 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ], 20)
+  )
+  const seen = []
+  for await (const c of stream) seen.push(c.type) // must complete without throwing
+  assert.deepEqual(seen, ['text-delta', 'usage', 'finish'])
+  assert.match(state().debug.lastError || '', /boom/)
 })

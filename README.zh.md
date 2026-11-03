@@ -6,6 +6,9 @@ DSH（DeepSeek Harness）实时输出速度计：在输入框下方的 composer 
 
 ## 它显示什么
 
+> 作用域：只显示**当前会话**。胶囊挂在会话内，请求带 `?session=<sessionId>`，宿主按会话维护 last/recent，并对 running 做归属过滤——别的窗口在生成时本会话不会显示别人的速率（tooltip 会提示「其他会话正在生成（不显示）」）。
+
+
 | 状态 | 胶囊内容 | 含义 |
 | --- | --- | --- |
 | 流式生成中 | `⚡ 339.5 tok/s` | 最近 1.2 秒滑动窗口的瞬时速率（带自校准系数换算） |
@@ -37,7 +40,7 @@ dsh plugin --profile <profile> add dsh-speed-meter
 
 ## 数据接口
 
-- `GET /speed-meter/api` → 当前快照 JSON：
+- `GET /speed-meter/api?session=<id>` → 该会话的快照 JSON（不带参数则是进程级最新一次调用）：
 
 ```json
 {

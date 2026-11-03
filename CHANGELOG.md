@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3 — 2026-11-03
+
+- **修复：插件会让本轮运行失败**（`TypeError: Cannot read properties of undefined (reading 'get')`，出现在 `sessionState` → `finalize`）。根因是 0.1.2 给进程级全局状态单例**新增了 `sessions` 字段**，而热重载前留下的旧形状对象没有该字段，`st.sessions.get(...)` 直接抛错；异常发生在 `llm/stream` 包装流的 `finally` 里，于是把整轮模型调用判失败。修法两层：
+  1. `state()` 对全局单例做**逐字段形状迁移/兜底**（`sessions`、`ratioByModel`、`recent`、`debug` 计数等缺失即补齐）——升级版本时不得假设旧对象已有新字段；
+  2. 指标插件永不拖垮 turn：`finalize()` 全程 `try/catch`，异常只记入 `debug.lastError`，绝不向模型流抛出。
+- 单测增至 16 个，新增「旧版全局状态迁移」与「per-session 存储抛错也不能让 turn 失败」两条回归。
+
+## 0.1.2 — 2026-11-03
+
+- **表盘只显示当前会话**：composer dock 的 `sessionId` prop 现在随每个请求带上（`?session=<id>`），宿主按会话维护 `last`/`recent`，快照对 `running` 也做归属过滤——别的窗口在生成时，本会话不再显示别人的速率。
+- 会话切换会清空并重连（SSE 重开、轮询改参数），不会残留上一个会话的读数。
+- 其他会话正在生成时，tooltip 会提示「其他会话正在生成（不显示）」。
+- 宿主调试通道支持 `ctx.emit('speed-meter/snapshot', sessionId, reply)` 取会话视角快照。
+- 单测增至 14 个（新增会话隔离、跨会话 running 不泄漏两条）。
+
 ## 0.1.1 — 2026-11-03
 
 - **修复：热重载后表盘冻结。** 根因是状态被关在 `apply()`/fiber 闭包里，而 Cordis 热重载后路由表可能仍指向旧一代 fiber 注册的 handler（重复路由容错又让旧路由留了下来），客户端因此永远读到重载瞬间冻结的那份快照。状态改为**模块级单例**：任何一代 fiber 的路由都读/写同一份数据，重载后立即恢复实时。
