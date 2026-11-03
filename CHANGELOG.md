@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 — 2026-11-03
+
+- 仓库文档格式对齐其他 DSH 插件：`README.md` 改为**中文为主**，新增 `README-en.md` 英文版，两份第 6 行都带语言切换链接 `[English](README-en.md) · [简体中文](README.md)`；同时补 npm/license badge。
+- `package.json` 的 `files` 同步为 `README.md` + `README-en.md`（发布件里的包说明因此为中文）。
+- 无代码改动。
+
 ## 0.1.4 — 2026-11-03
 
 - 新 tap 上岗即退掉旧 tap：HMR 瞬间新旧两代 `llm/stream` 监听器可能同时存活，同一次调用会被 finalize 两次（`recent` 里出现完全相同的两行）。现在 `apply()` 会先 dispose 上一代表针再装新的。
