@@ -186,3 +186,62 @@ test('while the turn is still running the pill keeps the live instant rate', () 
   assert.match(line, /123\.4 tok\/s/)
   assert.doesNotMatch(line, /本轮/)
 })
+
+// ── client-side derivation (remote sessions / no host data) ─────────────────
+
+function legacyWith(nodes, partial) {
+  return { nodes, partial: partial || null }
+}
+
+function assistantNode(turn, tokens, firstTokenTime, completedTime) {
+  return { kind: 'assistant', turn, timing: { firstTokenTime, completedTime }, usage: { outputTokens: tokens } }
+}
+
+test('falls back to session-derived turn stats when the host has no data', () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+  const legacy = legacyWith([
+    assistantNode(1, 40, 0, 400),
+    assistantNode(2, 120, 1000, 2000),
+    assistantNode(2, 80, 2000, 2500),
+  ])
+  const props = { sessionId: 'sess-R', useChat: (sel) => sel({ legacy }), useProjection: () => undefined }
+  const line = textOf(render(props)).join(' ')
+  // turn 2 = (120+80) tokens over (1000 + 500)ms => 133.3 tok/s
+  assert.match(line, /本轮/)
+  assert.match(line, /133\.3 tok\/s/)
+  assert.match(line, /200 tok/)
+  assert.match(line, /2次/)
+})
+
+test('derives a live rate from the in-flight step text growth', async () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+
+  let blocks = [{ type: 'text', text: 'a'.repeat(100) }]
+  const props = {
+    sessionId: 'sess-L',
+    useChat: (sel) => sel({ legacy: { nodes: [], partial: { turn: 1, step: 1, blocks } } }),
+    useProjection: () => undefined,
+  }
+  textOf(render(props)) // seed the tracker (expanding the pill runs DerivedPill)
+  await new Promise((r) => setTimeout(r, 320))
+  blocks = [{ type: 'text', text: 'a'.repeat(500) }] // +400 chars
+  const live = textOf(render(props)).join(' ')
+  assert.match(live, /tok\/s/)
+  assert.match(live, /生成中|⚡/)
+})
+
+test('marks host numbers that came from the remote Host', () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+  mod.__store.set({
+    running: { sessionId: 's', model: 'm', tokSec: 100, windowTokSec: 120.8, chars: 500, ratio: 3, estTokens: 1500, genMs: 2000 },
+    last: null, turn: null, recent: [], calibrated: [], source: 'remote',
+  })
+  const line = textOf(render()).join(' ')
+  assert.match(line, /⇅/)
+})

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-11-11
+
+- **新增：Remote 模式（DS Harness Remote 连接远端设备）下的胶囊数据**，两条数据源共存：
+  - **① 客户端派生**（默认可用，无需任何配置）：当本地宿主半拿不到本会话数据时，胶囊改用 dock 已收到的会话快照（`useChat` 的 `legacy.nodes` / `legacy.partial` + `useProjection('sessionStats')`）计算——已完成步用精确 `outputTokens ÷ (completedTime − firstTokenTime)`，进行中的步用块字符增长 × 0.34 tokens/char 估算瞬时速率。远端会话因此也能显示实时/本轮速率与用量。
+  - **② 远端 API 代理**（可选，数值与远端 webui 完全一致）：本地宿主半在 Remote client 模式下用 `dshRemoteClient.preview.open(webPort)` 打开远端 web 端口的本机预览 origin，再请求远端 `/speed-meter/api`（含 SSE 推送）。失败 5 秒退避并回退本地。
+  - 胶囊标注数据来源：远端代理值带 `⇅`，悬停可见 `source` 与 `remote` 诊断（enabled/connected/port/url/ok/lastError）。
+- 宿主配置新增 `remote: { enabled, webPort, pollMs }`；远端 Host 需在 `ds-harness-remote` 配 `loopback.ports: [<web 端口>]` 并以固定端口启动。
+- 单测增至 28 个（远端代理成功/无配置回退/preview 失败回退、客户端派生本轮与实时速率、远端标记）。
+
 ## 0.2.0 — 2026-11-04
 
 - **新增：每轮会话结束后显示"本轮"的平均输出速度与累计用量**（此前只显示上一次调用的数字）。

@@ -23,6 +23,34 @@ A turn runs from the agent going `running` to `idle`; while it streams the pill 
 
 Hovering shows the full readout (sessionId / model / purpose / chars / ratio / elapsed); clicking expands the last 12 calls and the calibration state.
 
+## Remote mode (DS Harness Remote)
+
+When this Harness is a **Remote client** of another machine, the model calls happen on that remote Host, so the local `/speed-meter/api` has nothing to report. The pill then uses:
+
+| Path | When | Data |
+| --- | --- | --- |
+| ① Client-side derivation (default) | the local host half has no data for this session, but the dock receives the conversation snapshot | finished steps: exact `outputTokens ÷ (completedTime − firstTokenTime)`; in-flight step: block-character growth × 0.34 as an instant estimate; `sessionStats` projection for session totals |
+| ② Remote API proxy (optional) | `remote.webPort` configured and Remote connected | the remote Host's `/speed-meter/api` (turn average, per-call exact values, instant window rate, calibration) — identical to the remote web UI |
+
+Proxy-fed numbers carry a `⇅` marker; the tooltip's first line names the source.
+
+### Enabling ② takes three pieces
+
+1. `dsh-speed-meter` installed on the remote Host (it serves `/speed-meter/api`).
+2. The remote Host's `ds-harness-remote` allows its own web port, e.g. `loopback: { ports: [57110] }` in that profile's patch.
+3. The remote Host started on a **fixed port** (not `--port 0`), and the local profile patch points at it:
+
+```yaml
+- id: speed-meter
+  name: dsh-speed-meter
+  config:
+    remote:
+      enabled: true
+      webPort: 57110
+```
+
+Failures land in `debug.remote.lastError`, fall back to ①/local data, and retry after 5s.
+
 ## How it works
 
 1. **Host half** taps the `llm/stream` waterfall, wrapping every streaming model call, counting `text-delta` / `reasoning-delta` / `tool-call-delta` characters and timing the first/last delta.

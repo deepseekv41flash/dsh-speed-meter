@@ -26,6 +26,43 @@ DSH（DeepSeek Harness）实时输出速度计：在输入框下方的 composer 
 
 悬停有完整读数（sessionId / model / purpose / 累计字符数 / ratio / 耗时）；点击展开最近 12 次调用与每模型校准状态。
 
+## 远端模式（DS Harness Remote）
+
+当这台 DSH 作为 **Remote 客户端**连着另一台机器时，模型调用发生在远端，本地 `/speed-meter/api` 没有数据。胶囊会按两条路径取数：
+
+| 路径 | 触发条件 | 数据 |
+| --- | --- | --- |
+| ① 客户端派生（默认） | 本地宿主半对本会话无数据，但 dock 收到了会话快照 | 已完成步：精确 `outputTokens ÷ (completedTime − firstTokenTime)`；进行中步：块字符增长 × 0.34 估算瞬时速率；`sessionStats` 投影给会话累计 |
+| ② 远端 API 代理（可选） | 本地配置了 `remote.webPort` 且 Remote 已连接 | 远端 Host 的 `/speed-meter/api`（含一轮平均、每调用精确值、实时窗口速率、自校准比），与远端 webui 上的数字一致 |
+
+远端代理值在胶囊上带 `⇅` 标记，悬停标题首行写明「数据来源：远端 Host（preview 代理）」。
+
+### 启用 ② 需要三处配合
+
+1. 远端 Host 装好 `dsh-speed-meter`（已具备 `/speed-meter/api`）。
+2. 远端 Host 的 `ds-harness-remote` 放行自己的 web 端口，例如 `cordis.patch.yml`：
+
+```yaml
+- id: ds-harness-remote
+  name: ds-harness-remote
+  config:
+    loopback:
+      ports: [57110]
+```
+
+3. 远端 Host 用**固定端口**启动（不能用 `--port 0`），本地 profile 的 patch 指到同一个端口：
+
+```yaml
+- id: speed-meter
+  name: dsh-speed-meter
+  config:
+    remote:
+      enabled: true
+      webPort: 57110
+```
+
+失败会记录在 `debug.remote.lastError` 并回退到 ①/本地数据，5 秒后再试。
+
 ## 原理
 
 1. **宿主半**挂在 `llm/stream` waterfall 上，包住每一次流式模型调用，逐块统计 `text-delta` / `reasoning-delta` / `tool-call-delta` 的字符数，并记录首个/最后一个增量的时间。

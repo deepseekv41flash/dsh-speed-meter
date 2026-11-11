@@ -427,3 +427,72 @@ test('a call with no running transition still opens an implicit turn', async () 
   assert.equal(t.tokens, 50)
   assert.equal(t.active, true)
 })
+
+// ── remote bridge (client mode → remote Host snapshot) ─────────────────────
+
+function remoteCtx(remoteClient) {
+  const { ctx, handlers, routes } = makeCtx()
+  const original = ctx.get
+  ctx.get = (name) => (name === 'dshRemoteClient' ? remoteClient : original(name))
+  return { ctx, handlers, routes }
+}
+
+function callRoute(route, url = '/speed-meter/api') {
+  return new Promise((resolve) => {
+    const res = {
+      status: 0, body: '', chunks: [],
+      writeHead(c) { this.status = c; return this },
+      end(b) { this.chunks.push(b == null ? '' : String(b)); this.body = this.chunks.join(''); resolve(JSON.parse(this.body)) },
+      write(b) { this.chunks.push(String(b)); return true },
+      on() { return this }, once() { return this }, setHeader() {}, getHeader() {}, removeHeader() {},
+    }
+    route.handler({ url, method: 'GET', headers: {}, on() { return this } }, res)
+  })
+}
+
+test('client mode proxies the remote Host snapshot when configured', async () => {
+  const remoteClient = {
+    status: () => ({ mode: 'remote', connected: true }),
+    preview: { open: async (port) => ({ url: 'http://127.0.0.1:4567/' }) },
+  }
+  const { ctx, routes } = remoteCtx(remoteClient)
+  plugin.apply(ctx, { remote: { enabled: true, webPort: 57110 } })
+
+  const realFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url) => {
+    calls.push(String(url))
+    return {
+      ok: true, status: 200,
+      json: async () => ({ running: null, last: { sessionId: 'R1', tokens: 999 }, recent: [], turn: null, calibrated: [] }),
+    }
+  }
+  try {
+    const body = await callRoute(routes.get('/speed-meter/api'), '/speed-meter/api?session=R1')
+    assert.equal(body.source, 'remote')
+    assert.equal(body.last.sessionId, 'R1')
+    assert.equal(body.last.tokens, 999)
+    assert.ok(calls[0].startsWith('http://127.0.0.1:4567/speed-meter/api'), 'uses the preview origin: ' + calls[0])
+    assert.ok(calls[0].includes('session=R1'))
+    assert.equal(body.remote.port, 57110)
+  } finally { globalThis.fetch = realFetch }
+})
+
+test('without configuration the pill keeps local data', async () => {
+  const { ctx, routes } = remoteCtx({ status: () => ({ mode: 'local', connected: false }), preview: { open: async () => ({ url: 'x' }) } })
+  plugin.apply(ctx) // no remote config
+  const body = await callRoute(routes.get('/speed-meter/api'))
+  assert.equal(body.source, 'local')
+})
+
+test('a failing preview falls back to local data and records the error', async () => {
+  const remoteClient = {
+    status: () => ({ mode: 'remote', connected: true }),
+    preview: { open: async () => { throw new Error('PORT_NOT_ALLOWED') } },
+  }
+  const { ctx, routes } = remoteCtx(remoteClient)
+  plugin.apply(ctx, { remote: { enabled: true, webPort: 57110 } })
+  const body = await callRoute(routes.get('/speed-meter/api'))
+  assert.equal(body.source, 'local')
+  assert.match(body.remote.lastError, /PORT_NOT_ALLOWED/)
+})
