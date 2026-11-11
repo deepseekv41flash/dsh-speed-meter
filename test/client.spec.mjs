@@ -245,3 +245,32 @@ test('marks host numbers that came from the remote Host', () => {
   const line = textOf(render()).join(' ')
   assert.match(line, /⇅/)
 })
+
+test('counts kind-keyed blocks (chat content blocks use `kind`, not `type`)', async () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+  let blocks = [{ kind: 'text', text: 'a'.repeat(120) }, { kind: 'reasoning', text: 'r'.repeat(80) }]
+  const props = {
+    sessionId: 'sess-K',
+    useChat: (sel) => sel({ legacy: { nodes: [], partial: { turn: 1, step: 1, blocks } } }),
+    useProjection: () => undefined,
+  }
+  textOf(render(props))
+  await new Promise((r) => setTimeout(r, 320))
+  blocks = [{ kind: 'text', text: 'a'.repeat(620) }, { kind: 'reasoning', text: 'r'.repeat(80) }]
+  const line = textOf(render(props)).join(' ')
+  assert.match(line, /tok\/s/)
+})
+
+test('suppresses the rate for a burst step instead of reporting millions of tok/s', () => {
+  const { mod, slots, rendered } = load()
+  mod.apply({ get: (k) => (k === 'slots' ? slots : undefined) })
+  const { render } = rendered[0]
+  const bad = { kind: 'assistant', turn: 2, timing: { firstTokenTime: 1000, completedTime: 1001 }, usage: { outputTokens: 12454 } }
+  const props = { sessionId: 'sess-B', useChat: (sel) => sel({ legacy: { nodes: [bad], partial: null } }), useProjection: () => undefined }
+  const line = textOf(render(props)).join(' ')
+  assert.match(line, /本轮/)
+  assert.match(line, /12,454 tok/)
+  assert.doesNotMatch(line, /tok\/s/)
+})
